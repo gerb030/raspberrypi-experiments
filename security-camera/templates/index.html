@@ -33,9 +33,22 @@
     border-radius: 6px; overflow: hidden; transition: border-color .15s;
   }
   .card:hover { border-color: #555; }
-  .card a { display: block; }
-  .card img { width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; }
-  .card-info { padding: .45rem .6rem; font-size: .78rem; color: #888; }
+  /* Still image card */
+  .card.still a { display: block; }
+  .card.still img { width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; }
+  /* Movie card */
+  .card.movie video {
+    width: 100%; aspect-ratio: 16/9; display: block; background: #000;
+  }
+  .card-info {
+    padding: .45rem .6rem; font-size: .78rem; color: #888;
+    display: flex; align-items: center; gap: .4rem;
+  }
+  .badge {
+    font-size: .68rem; padding: .1rem .35rem; border-radius: 3px;
+    text-transform: uppercase; letter-spacing: .04em;
+  }
+  .badge-movie { background: #2a1f00; color: #c8900a; border: 1px solid #5a3d00; }
   .empty { grid-column: 1 / -1; text-align: center; color: #555; padding: 4rem 0; font-size: 1rem; }
   #sentinel { height: 1px; }
   #loading { text-align: center; color: #555; font-size: .85rem; padding: 1.5rem 0; display: none; }
@@ -79,12 +92,22 @@
   const loadingEl = document.getElementById('loading');
   const sentinel = document.getElementById('sentinel');
 
-  function makeCard(img) {
-    return `<div class="card">
-      <a href="/images/${img.path}" target="_blank">
-        <img src="/images/${img.path}" alt="${img.date} ${img.time}" loading="lazy">
+  function makeCard(item) {
+    if (item.type === 'movie') {
+      const poster = item.poster ? `poster="/images/${item.poster}"` : '';
+      return `<div class="card movie">
+        <video src="/images/${item.path}" controls preload="none" playsinline ${poster}></video>
+        <div class="card-info">
+          <span class="badge badge-movie">video</span>
+          ${item.date} &nbsp; ${item.time}
+        </div>
+      </div>`;
+    }
+    return `<div class="card still">
+      <a href="/images/${item.path}" target="_blank">
+        <img src="/images/${item.path}" alt="${item.date} ${item.time}" loading="lazy">
       </a>
-      <div class="card-info">${img.date} &nbsp; ${img.time}</div>
+      <div class="card-info">${item.date} &nbsp; ${item.time}</div>
     </div>`;
   }
 
@@ -105,7 +128,7 @@
     const data = await fetch(url).then(r => r.json());
 
     if (data.images.length === 0 && offset === 0) {
-      grid.innerHTML = `<p class="empty">No images found${selectedDate ? ' for ' + selectedDate : ''}.</p>`;
+      grid.innerHTML = `<p class="empty">No captures found${selectedDate ? ' for ' + selectedDate : ''}.</p>`;
     } else {
       grid.insertAdjacentHTML('beforeend', data.images.map(makeCard).join(''));
     }
@@ -115,27 +138,23 @@
     loading = false;
     loadingEl.style.display = 'none';
 
-    // If sentinel is still on screen, keep loading until it scrolls off
     if (!exhausted && sentinelVisible()) {
       loadMore();
     }
   }
 
-  // Trigger load when sentinel scrolls into view
   const observer = new IntersectionObserver(entries => {
     if (entries[0].isIntersecting) loadMore();
   }, { rootMargin: '400px' });
   observer.observe(sentinel);
 
-  // Date picker
   document.getElementById('date-picker').addEventListener('change', function() {
     if (this.value) window.location.href = '/date/' + this.value;
   });
 
-  // Dates sidebar
   fetch('/api/dates').then(r => r.json()).then(dates => {
     const el = document.getElementById('dates-list');
-    if (!dates.length) { el.innerHTML = '<span style="color:#555;font-size:.82rem">No images yet.</span>'; return; }
+    if (!dates.length) { el.innerHTML = '<span style="color:#555;font-size:.82rem">No captures yet.</span>'; return; }
     el.innerHTML = dates.map(d =>
       `<a href="/date/${d}" class="${d === selectedDate ? 'active' : ''}">${d}</a>`
     ).join('');

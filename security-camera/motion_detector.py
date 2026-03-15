@@ -5,6 +5,7 @@ import configparser
 import logging
 import os
 import signal
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -37,14 +38,21 @@ def free_disk_pct(path: Path) -> float:
 
 
 def evict_oldest(image_dir: Path) -> None:
-    """Delete the single oldest image file to reclaim space."""
-    jpgs = sorted(image_dir.glob("**/*.jpg"), key=lambda p: p.stat().st_mtime)
-    if not jpgs:
+    """Delete the single oldest media file to reclaim space."""
+    files = sorted(
+        list(image_dir.glob("**/*.jpg")) + list(image_dir.glob("**/*.mp4")),
+        key=lambda p: p.stat().st_mtime,
+    )
+    if not files:
         return
-    oldest = jpgs[0]
+    oldest = files[0]
     oldest.unlink()
-    log.warning("Disk space low — deleted oldest image: %s", oldest)
-    # Remove empty date directory if nothing left in it
+    # Remove associated poster frame if this was a movie
+    if oldest.suffix == ".mp4":
+        poster = oldest.with_suffix(".jpg")
+        if poster.exists():
+            poster.unlink()
+    log.warning("Disk space low — deleted oldest file: %s", oldest)
     try:
         oldest.parent.rmdir()
     except OSError:
@@ -52,18 +60,17 @@ def evict_oldest(image_dir: Path) -> None:
 
 
 def enforce_disk_space(image_dir: Path) -> None:
-    """Keep deleting oldest images until free space is above MIN_FREE_PCT."""
+    """Keep deleting oldest files until free space is above MIN_FREE_PCT."""
     while free_disk_pct(image_dir) < MIN_FREE_PCT:
         before = free_disk_pct(image_dir)
         evict_oldest(image_dir)
         after = free_disk_pct(image_dir)
         if after <= before:
-            # No files left to delete, stop to avoid infinite loop
-            log.error("Cannot free enough disk space — no more images to delete.")
+            log.error("Cannot free enough disk space — no more files to delete.")
             break
 
 
-def save_image(frame_rgb: np.ndarray, image_dir: Path) -> Path:
+def save_still(frame_rgb: np.ndarray, image_dir: Path) -> Path:
     now = datetime.now()
     date_dir = image_dir / now.strftime("%Y-%m-%d")
     date_dir.mkdir(parents=True, exist_ok=True)
@@ -73,22 +80,96 @@ def save_image(frame_rgb: np.ndarray, image_dir: Path) -> Path:
     return filename
 
 
+def record_movie(cam: Picamera2, image_dir: Path, duration: float,
+                 width: int, height: int, framerate: int) -> Path:
+    """Capture frames into a temp AVI then re-encode to H264 MP4."""
+    now = datetime.now()
+    date_dir = image_dir / now.strftime("%Y-%m-%d")
+    date_dir.mkdir(parents=True, exist_ok=True)
+
+    tmp_path = date_dir / (now.strftime("%H-%M-%S") + "_tmp.avi")
+    out_path = date_dir / now.strftime("%H-%M-%S.mp4")
+
+    fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+    writer = cv2.VideoWriter(str(tmp_path), fourcc, float(framerate), (width, height))
+
+    log.info("Recording movie for %.1fs → %s", duration, out_path)
+    end_time = time.monotonic() + duration
+    while time.monotonic() < end_time:
+        frame = cam.capture_array()
+        bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        writer.write(bgr)
+
+    writer.release()
+
+    # Re-encode to H264 MP4 for browser playback
+    result = subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", str(tmp_path),
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+            str(out_path),
+        ],
+        capture_output=True,
+    )
+    tmp_path.unlink(missing_ok=True)
+
+    if result.returncode != 0:
+        log.error("ffmpeg encoding failed: %s", result.stderr.decode())
+        return None
+
+    # Extract a poster frame from the middle of the clip
+    poster_path = out_path.with_suffix(".jpg")
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-ss", str(duration / 2), "-i", str(out_path),
+            "-vframes", "1", "-q:v", "3", str(poster_path),
+        ],
+        capture_output=True,
+    )
+
+    return out_path
+
+
 def run():
     cfg = load_config()
 
     width = cfg.getint("camera", "resolution_width")
     height = cfg.getint("camera", "resolution_height")
     framerate = cfg.getint("camera", "framerate")
+    saturation = cfg.getfloat("camera", "saturation", fallback=1.0)
+    brightness = cfg.getfloat("camera", "brightness", fallback=0.0)
+    contrast = cfg.getfloat("camera", "contrast", fallback=1.0)
+    awb_mode_name = cfg.get("camera", "awb_mode", fallback="Auto").strip()
     threshold = cfg.getint("motion", "sensitivity_threshold")
     min_area = cfg.getint("motion", "min_contour_area")
     cooldown = cfg.getfloat("motion", "cooldown_seconds")
+    capture_mode = cfg.get("motion", "capture_mode", fallback="still").strip().lower()
+    movie_duration = cfg.getfloat("motion", "movie_duration", fallback=10.0)
     image_dir = Path(cfg.get("storage", "image_dir"))
     image_dir.mkdir(parents=True, exist_ok=True)
+
+    if capture_mode not in ("still", "movie"):
+        log.error("Invalid capture_mode '%s', defaulting to 'still'", capture_mode)
+        capture_mode = "still"
+
+    log.info("Capture mode: %s", capture_mode)
+
+    awb_modes = {
+        "Auto": 0, "Tungsten": 1, "Fluorescent": 2,
+        "Indoor": 3, "Daylight": 4, "Cloudy": 5,
+    }
+    awb_mode = awb_modes.get(awb_mode_name, 0)
 
     cam = Picamera2()
     config = cam.create_video_configuration(
         main={"size": (width, height), "format": "RGB888"},
-        controls={"FrameRate": framerate},
+        controls={
+            "FrameRate": framerate,
+            "Saturation": saturation,
+            "Brightness": brightness,
+            "Contrast": contrast,
+            "AwbMode": awb_mode,
+        },
     )
     cam.configure(config)
 
@@ -131,9 +212,14 @@ def run():
             now = time.monotonic()
             if now - last_save >= cooldown:
                 enforce_disk_space(image_dir)
-                path = save_image(frame, image_dir)
-                log.info("Motion detected — saved %s", path)
-                last_save = now
+                if capture_mode == "movie":
+                    path = record_movie(cam, image_dir, movie_duration, width, height, framerate)
+                else:
+                    path = save_still(frame, image_dir)
+                if path:
+                    log.info("Motion detected — saved %s", path)
+                # Cooldown starts after capture finishes
+                last_save = time.monotonic()
 
         time.sleep(1.0 / framerate)
 

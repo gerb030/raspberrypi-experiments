@@ -18,22 +18,32 @@ PORT = cfg.getint("web", "port")
 app = Flask(__name__, template_folder="templates")
 
 
-def get_all_images(date_filter: str | None = None) -> list[dict]:
+def get_all_media(date_filter: str | None = None) -> list[dict]:
     if not IMAGE_DIR.exists():
         return []
-    images = []
-    pattern = f"{date_filter}/*.jpg" if date_filter else "**/*.jpg"
-    for jpg in IMAGE_DIR.glob(pattern):
-        date_str = jpg.parent.name
-        time_str = jpg.stem.replace("-", ":")
-        images.append({
-            "path": f"{date_str}/{jpg.name}",
-            "date": date_str,
-            "time": time_str,
-            "timestamp": jpg.stat().st_mtime,
-        })
-    images.sort(key=lambda x: x["timestamp"], reverse=True)
-    return images
+    media = []
+    pattern_base = f"{date_filter}/*" if date_filter else "**/*"
+    for ext, media_type in ((".mp4", "movie"), (".jpg", "still")):
+        for f in IMAGE_DIR.glob(pattern_base + ext):
+            date_str = f.parent.name
+            time_str = f.stem.replace("-", ":")
+            # .jpg files that share a name with an .mp4 are poster frames, not stills
+            if ext == ".jpg" and (f.with_suffix(".mp4")).exists():
+                continue
+            item = {
+                "path": f"{date_str}/{f.name}",
+                "date": date_str,
+                "time": time_str,
+                "type": media_type,
+                "timestamp": f.stat().st_mtime,
+            }
+            if media_type == "movie":
+                poster = f.with_suffix(".jpg")
+                if poster.exists():
+                    item["poster"] = f"{date_str}/{poster.name}"
+            media.append(item)
+    media.sort(key=lambda x: x["timestamp"], reverse=True)
+    return media
 
 
 def get_dates() -> list[str]:
@@ -60,13 +70,13 @@ def api_images():
     date_filter = request.args.get("date")
     offset = int(request.args.get("offset", 0))
     limit = int(request.args.get("limit", PAGE_SIZE))
-    all_images = get_all_images(date_filter)
-    page = all_images[offset:offset + limit]
+    all_media = get_all_media(date_filter)
+    page = all_media[offset:offset + limit]
     return jsonify({
         "images": page,
-        "total": len(all_images),
+        "total": len(all_media),
         "offset": offset,
-        "has_more": offset + limit < len(all_images),
+        "has_more": offset + limit < len(all_media),
     })
 
 
