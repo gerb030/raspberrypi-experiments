@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Security Camera</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #111; color: #ddd; font-family: system-ui, sans-serif; min-height: 100vh; }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 1rem 1.5rem; background: #1a1a1a; border-bottom: 1px solid #333;
+    flex-wrap: wrap; gap: .75rem;
+  }
+  header h1 { font-size: 1.1rem; font-weight: 600; letter-spacing: .03em; }
+  header h1 span { color: #888; font-weight: 400; margin-left: .5rem; font-size: .95rem; }
+  .date-nav { display: flex; align-items: center; gap: .5rem; }
+  .date-nav input[type="date"] {
+    background: #222; border: 1px solid #444; color: #ddd;
+    padding: .35rem .6rem; border-radius: 4px; font-size: .9rem; cursor: pointer;
+  }
+  .date-nav a.home {
+    color: #aaa; text-decoration: none; font-size: .85rem;
+    padding: .35rem .7rem; border: 1px solid #444; border-radius: 4px;
+  }
+  .date-nav a.home:hover { background: #222; }
+  main { padding: 1.5rem; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: .75rem; }
+  @media (max-width: 900px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 500px) { .grid { grid-template-columns: 1fr; } }
+  .card {
+    background: #1a1a1a; border: 1px solid #2a2a2a;
+    border-radius: 6px; overflow: hidden; transition: border-color .15s;
+  }
+  .card:hover { border-color: #555; }
+  .card a { display: block; }
+  .card img { width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; }
+  .card-info { padding: .45rem .6rem; font-size: .78rem; color: #888; }
+  .empty { grid-column: 1 / -1; text-align: center; color: #555; padding: 4rem 0; font-size: 1rem; }
+  #sentinel { height: 1px; }
+  #loading { text-align: center; color: #555; font-size: .85rem; padding: 1.5rem 0; display: none; }
+  .dates-sidebar { margin-top: 2rem; border-top: 1px solid #222; padding-top: 1.5rem; }
+  .dates-sidebar h2 { font-size: .85rem; color: #666; text-transform: uppercase; letter-spacing: .08em; margin-bottom: .75rem; }
+  .dates-list { display: flex; flex-wrap: wrap; gap: .4rem; }
+  .dates-list a {
+    color: #aaa; text-decoration: none; font-size: .82rem;
+    padding: .3rem .65rem; border: 1px solid #333; border-radius: 4px;
+  }
+  .dates-list a:hover, .dates-list a.active { background: #2a2a2a; border-color: #555; color: #eee; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Security Camera <span>{{ title }}</span></h1>
+  <div class="date-nav">
+    <a class="home" href="/">Latest</a>
+    <input type="date" id="date-picker" {% if selected_date %}value="{{ selected_date }}"{% endif %}>
+  </div>
+</header>
+<main>
+  <div class="grid" id="grid"></div>
+  <div id="loading">Loading…</div>
+  <div id="sentinel"></div>
+  <div class="dates-sidebar">
+    <h2>Browse by date</h2>
+    <div class="dates-list" id="dates-list">
+      <span style="color:#555;font-size:.82rem">Loading…</span>
+    </div>
+  </div>
+</main>
+<script>
+  const PAGE = 8;
+  const selectedDate = {{ selected_date | tojson }};
+  let offset = 0;
+  let loading = false;
+  let exhausted = false;
+
+  const grid = document.getElementById('grid');
+  const loadingEl = document.getElementById('loading');
+  const sentinel = document.getElementById('sentinel');
+
+  function makeCard(img) {
+    return `<div class="card">
+      <a href="/images/${img.path}" target="_blank">
+        <img src="/images/${img.path}" alt="${img.date} ${img.time}" loading="lazy">
+      </a>
+      <div class="card-info">${img.date} &nbsp; ${img.time}</div>
+    </div>`;
+  }
+
+  function sentinelVisible() {
+    const rect = sentinel.getBoundingClientRect();
+    return rect.top < window.innerHeight + 400;
+  }
+
+  async function loadMore() {
+    if (loading || exhausted) return;
+    loading = true;
+    loadingEl.style.display = 'block';
+
+    const url = selectedDate
+      ? `/api/images?date=${selectedDate}&offset=${offset}&limit=${PAGE}`
+      : `/api/images?offset=${offset}&limit=${PAGE}`;
+
+    const data = await fetch(url).then(r => r.json());
+
+    if (data.images.length === 0 && offset === 0) {
+      grid.innerHTML = `<p class="empty">No images found${selectedDate ? ' for ' + selectedDate : ''}.</p>`;
+    } else {
+      grid.insertAdjacentHTML('beforeend', data.images.map(makeCard).join(''));
+    }
+
+    offset += data.images.length;
+    exhausted = !data.has_more;
+    loading = false;
+    loadingEl.style.display = 'none';
+
+    // If sentinel is still on screen, keep loading until it scrolls off
+    if (!exhausted && sentinelVisible()) {
+      loadMore();
+    }
+  }
+
+  // Trigger load when sentinel scrolls into view
+  const observer = new IntersectionObserver(entries => {
+    if (entries[0].isIntersecting) loadMore();
+  }, { rootMargin: '400px' });
+  observer.observe(sentinel);
+
+  // Date picker
+  document.getElementById('date-picker').addEventListener('change', function() {
+    if (this.value) window.location.href = '/date/' + this.value;
+  });
+
+  // Dates sidebar
+  fetch('/api/dates').then(r => r.json()).then(dates => {
+    const el = document.getElementById('dates-list');
+    if (!dates.length) { el.innerHTML = '<span style="color:#555;font-size:.82rem">No images yet.</span>'; return; }
+    el.innerHTML = dates.map(d =>
+      `<a href="/date/${d}" class="${d === selectedDate ? 'active' : ''}">${d}</a>`
+    ).join('');
+  });
+</script>
+</body>
+</html>

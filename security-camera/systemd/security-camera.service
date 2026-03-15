@@ -1,0 +1,15 @@
+[Unit]
+Description=Security Camera Motion Detector
+After=network.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/security-camera
+ExecStart=/usr/bin/python3 /home/pi/security-camera/motion_detector.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
