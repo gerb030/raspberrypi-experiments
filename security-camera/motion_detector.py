@@ -23,7 +23,8 @@ logging.basicConfig(
 log = logging.getLogger("security-camera")
 
 CONFIG_PATH = Path(__file__).parent / "config.ini"
-MIN_FREE_PCT = 5.0  # enforce at least this % free disk space
+MIN_FREE_PCT = 5.0      # fallback — overridden by config at startup
+TARGET_FREE_PCT = 15.0  # fallback — overridden by config at startup
 
 
 def load_config():
@@ -60,8 +61,11 @@ def evict_oldest(image_dir: Path) -> None:
 
 
 def enforce_disk_space(image_dir: Path) -> None:
-    """Keep deleting oldest files until free space is above MIN_FREE_PCT."""
-    while free_disk_pct(image_dir) < MIN_FREE_PCT:
+    """If free space drops below MIN_FREE_PCT, delete oldest files until TARGET_FREE_PCT is reached."""
+    if free_disk_pct(image_dir) >= MIN_FREE_PCT:
+        return
+    log.warning("Disk space below %.0f%% — freeing space to %.0f%%", MIN_FREE_PCT, TARGET_FREE_PCT)
+    while free_disk_pct(image_dir) < TARGET_FREE_PCT:
         before = free_disk_pct(image_dir)
         evict_oldest(image_dir)
         after = free_disk_pct(image_dir)
@@ -117,15 +121,22 @@ def record_movie(cam: Picamera2, image_dir: Path, duration: float,
         log.error("ffmpeg encoding failed: %s", result.stderr.decode())
         return None
 
-    # Extract a poster frame from the middle of the clip
+    # Extract a poster frame — accurate seek to middle, fall back to first frame
     poster_path = out_path.with_suffix(".jpg")
-    subprocess.run(
+    seek = str(duration / 2)
+    result_poster = subprocess.run(
         [
-            "ffmpeg", "-y", "-ss", str(duration / 2), "-i", str(out_path),
-            "-vframes", "1", "-q:v", "3", str(poster_path),
+            "ffmpeg", "-y", "-i", str(out_path),
+            "-ss", seek, "-vframes", "1", "-update", "1", "-q:v", "3", str(poster_path),
         ],
         capture_output=True,
     )
+    if not poster_path.exists():
+        # Fall back to first available frame
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", str(out_path), "-vframes", "1", "-update", "1", "-q:v", "3", str(poster_path)],
+            capture_output=True,
+        )
 
     return out_path
 
@@ -147,6 +158,10 @@ def run():
     movie_duration = cfg.getfloat("motion", "movie_duration", fallback=10.0)
     image_dir = Path(cfg.get("storage", "image_dir"))
     image_dir.mkdir(parents=True, exist_ok=True)
+
+    global MIN_FREE_PCT, TARGET_FREE_PCT
+    MIN_FREE_PCT = cfg.getfloat("storage", "min_free_pct", fallback=5.0)
+    TARGET_FREE_PCT = cfg.getfloat("storage", "target_free_pct", fallback=15.0)
 
     if capture_mode not in ("still", "movie"):
         log.error("Invalid capture_mode '%s', defaulting to 'still'", capture_mode)

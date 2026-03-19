@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tula Security Camera — Settings</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #111; color: #ddd; font-family: system-ui, sans-serif; min-height: 100vh; }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 1rem 1.5rem; background: #1a1a1a; border-bottom: 1px solid #333;
+  }
+  header h1 { font-size: 1.1rem; font-weight: 600; letter-spacing: .03em; }
+  header nav { display: flex; gap: .5rem; }
+  header nav a {
+    color: #aaa; text-decoration: none; font-size: .85rem;
+    padding: .35rem .7rem; border: 1px solid #444; border-radius: 4px;
+  }
+  header nav a:hover { background: #222; }
+  header nav a.active { border-color: #666; color: #eee; background: #222; }
+
+  main { max-width: 760px; margin: 0 auto; padding: 2rem 1.5rem; }
+
+  .toast {
+    display: flex; align-items: center; gap: .6rem;
+    background: #0d2e1a; border: 1px solid #1a5c32; color: #4caf77;
+    padding: .75rem 1rem; border-radius: 6px; margin-bottom: 1.5rem;
+    font-size: .9rem;
+  }
+  .toast.warn { background: #2a1f00; border-color: #5a3d00; color: #c8900a; }
+
+  section {
+    background: #1a1a1a; border: 1px solid #2a2a2a;
+    border-radius: 8px; margin-bottom: 1.5rem; overflow: hidden;
+  }
+  section h2 {
+    font-size: .8rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .1em; color: #888; padding: .85rem 1.25rem;
+    border-bottom: 1px solid #222; background: #161616;
+  }
+  .field { padding: 1rem 1.25rem; border-bottom: 1px solid #1e1e1e; }
+  .field:last-child { border-bottom: none; }
+  .field-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: .3rem; }
+  .field-header label { font-size: .9rem; font-weight: 500; }
+  .field-value { font-size: .9rem; color: #aaa; font-variant-numeric: tabular-nums; min-width: 4rem; text-align: right; }
+  .field-desc { font-size: .78rem; color: #666; margin-bottom: .6rem; line-height: 1.45; }
+
+  /* Slider */
+  input[type="range"] {
+    -webkit-appearance: none; width: 100%; height: 4px;
+    background: #333; border-radius: 2px; outline: none; cursor: pointer;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 16px; height: 16px;
+    background: #eee; border-radius: 50%; cursor: pointer;
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 16px; height: 16px; background: #eee; border-radius: 50%;
+    border: none; cursor: pointer;
+  }
+
+  /* Select */
+  select {
+    background: #222; border: 1px solid #444; color: #ddd;
+    padding: .4rem .65rem; border-radius: 4px; font-size: .9rem;
+    width: 100%; cursor: pointer; appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right .75rem center;
+    padding-right: 2rem;
+  }
+
+  /* Radio group (capture mode) */
+  .radio-group { display: flex; gap: .5rem; }
+  .radio-group label {
+    flex: 1; text-align: center; padding: .5rem;
+    border: 1px solid #333; border-radius: 4px; cursor: pointer;
+    font-size: .88rem; color: #aaa; transition: all .15s;
+  }
+  .radio-group input[type="radio"] { display: none; }
+  .radio-group input[type="radio"]:checked + label {
+    border-color: #666; background: #2a2a2a; color: #eee;
+  }
+
+  /* Text / number input */
+  input[type="text"], input[type="number"] {
+    background: #222; border: 1px solid #444; color: #ddd;
+    padding: .4rem .65rem; border-radius: 4px; font-size: .9rem; width: 100%;
+  }
+
+  /* Movie duration — only shown in movie mode */
+  #movie-duration-field { display: none; }
+
+  .actions { display: flex; justify-content: flex-end; padding-top: .5rem; }
+  button[type="submit"] {
+    background: #eee; color: #111; border: none; font-size: .9rem;
+    font-weight: 600; padding: .6rem 1.6rem; border-radius: 5px; cursor: pointer;
+  }
+  button[type="submit"]:hover { background: #fff; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Tula Security Camera</h1>
+  <nav>
+    <a href="/">Captures</a>
+    <a href="/settings" class="active">Settings</a>
+  </nav>
+</header>
+<main>
+
+  {% if saved %}
+  <div class="toast">&#10003; Settings saved and motion detector restarted.</div>
+  {% endif %}
+  {% if web_restarting %}
+  <div class="toast warn">&#9888; Web server port/host changed — restarting in a moment. Reconnect if the page stops responding.</div>
+  {% endif %}
+
+  <form method="POST" action="/settings">
+
+    <!-- CAMERA -->
+    <section>
+      <h2>Camera</h2>
+
+      <div class="field">
+        <div class="field-header"><label for="resolution">Resolution</label></div>
+        <div class="field-desc">Capture resolution. Higher resolutions show more detail but use more disk space and take longer to encode in movie mode.</div>
+        <select id="resolution" name="resolution">
+          {% for r in resolutions %}
+          <option value="{{ r }}" {% if cfg.resolution == r %}selected{% endif %}>{{ r.replace(' x ', ' × ') }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="field">
+        <div class="field-header">
+          <label for="framerate">Frame rate</label>
+          <span class="field-value" id="framerate-val">{{ cfg.framerate }} fps</span>
+        </div>
+        <div class="field-desc">Frames analysed per second. Higher values catch faster movement but use more CPU. 10 is a good balance for a security camera.</div>
+        <input type="range" id="framerate" name="framerate"
+               min="1" max="30" step="1" value="{{ cfg.framerate }}"
+               oninput="show('framerate-val', this.value, ' fps')">
+      </div>
+
+      <div class="field">
+        <div class="field-header">
+          <label for="saturation">Saturation</label>
+          <span class="field-value" id="saturation-val">{{ cfg.saturation }}</span>
+        </div>
+        <div class="field-desc">Colour intensity. Set to <strong>0.0</strong> for greyscale — recommended for NoIR cameras which have no IR cut filter and produce a purple/blue cast in colour mode.</div>
+        <input type="range" id="saturation" name="saturation"
+               min="0.0" max="2.0" step="0.05" value="{{ cfg.saturation }}"
+               oninput="show('saturation-val', parseFloat(this.value).toFixed(2))">
+      </div>
+
+      <div class="field">
+        <div class="field-header">
+          <label for="brightness">Brightness</label>
+          <span class="field-value" id="brightness-val">{{ cfg.brightness }}</span>
+        </div>
+        <div class="field-desc">Shifts the overall exposure. 0.0 is unchanged. Increase if captures are too dark; decrease if they are washed out.</div>
+        <input type="range" id="brightness" name="brightness"
+               min="-1.0" max="1.0" step="0.05" value="{{ cfg.brightness }}"
+               oninput="show('brightness-val', parseFloat(this.value).toFixed(2))">
+      </div>
+
+      <div class="field">
+        <div class="field-header">
+          <label for="contrast">Contrast</label>
+          <span class="field-value" id="contrast-val">{{ cfg.contrast }}</span>
+        </div>
+        <div class="field-desc">Tonal range multiplier. 1.0 is unchanged. Increase to make dark areas darker and bright areas brighter — useful in low-light scenes.</div>
+        <input type="range" id="contrast" name="contrast"
+               min="0.5" max="4.0" step="0.1" value="{{ cfg.contrast }}"
+               oninput="show('contrast-val', parseFloat(this.value).toFixed(1))">
+      </div>
+
+      <div class="field">
+        <div class="field-header"><label for="awb_mode">White balance</label></div>
+        <div class="field-desc">Auto white balance preset. Has no effect when saturation is 0 (greyscale). <em>Tungsten</em> or <em>Indoor</em> can reduce blue cast under IR lighting.</div>
+        <select id="awb_mode" name="awb_mode">
+          {% for m in awb_modes %}
+          <option value="{{ m }}" {% if cfg.awb_mode == m %}selected{% endif %}>{{ m }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </section>
+
+    <!-- MOTION -->
+    <section>
+      <h2>Motion detection</h2>
+
+      <div class="field">
+        <div class="field-header">
+          <label>Capture mode</label>
+        </div>
+        <div class="field-desc">
+          <strong>Still</strong> — saves a single JPEG the moment motion is detected. Instant and lightweight.<br>
+          <strong>Movie</strong> — records a video clip for the configured duration. Requires more CPU and disk space.
+        </div>
+        <div class="radio-group">
+          <input type="radio" id="mode-still" name="capture_mode" value="still" {% if cfg.capture_mode == 'still' %}checked{% endif %} onchange="toggleMovieDuration()">
+          <label for="mode-still">Still photo</label>
+          <input type="radio" id="mode-movie" name="capture_mode" value="movie" {% if cfg.capture_mode == 'movie' %}checked{% endif %} onchange="toggleMovieDuration()">
+          <label for="mode-movie">Movie clip</label>
+        </div>
+      </div>
+
+      <div class="field" id="movie-duration-field">
+        <div class="field-header">
+          <label for="movie_duration">Clip duration</label>
+          <span class="field-value" id="movie_duration-val">{{ cfg.movie_duration | int }} s</span>
+        </div>
+        <div class="field-desc">How many seconds to record per clip. The cooldown timer starts after the clip finishes, so back-to-back recordings are spaced at least cooldown + duration seconds apart.</div>
+        <input type="range" id="movie_duration" name="movie_duration"
+               min="3" max="120" step="1" value="{{ cfg.movie_duration | int }}"
+               oninput="show('movie_duration-val', this.value, ' s')">
+      </div>
+
+      <div class="field">
+        <div class="field-header">
+          <label for="sensitivity_threshold">Sensitivity threshold</label>
+          <span class="field-value" id="sensitivity_threshold-val">{{ cfg.sensitivity_threshold }}</span>
+        </div>
+        <div class="field-desc">How much a pixel must change (0–255 scale) before it is counted as motion. <strong>Lower = more sensitive.</strong> Raise this if the camera triggers on lighting changes, shadows, or flickering.</div>
+        <input type="range" id="sensitivity_threshold" name="sensitivity_threshold"
+               min="5" max="200" step="5" value="{{ cfg.sensitivity_threshold }}"
+               oninput="show('sensitivity_threshold-val', this.value)">
+      </div>
+
+      <div class="field">
+        <div class="field-header">
+          <label for="min_contour_area">Minimum motion area</label>
+          <span class="field-value" id="min_contour_area-val">{{ cfg.min_contour_area }} px²</span>
+        </div>
+        <div class="field-desc">The smallest moving region (in pixels) that counts as motion. Raise this to ignore insects, dust, or other small objects. At 1280×720: ~1 500 ≈ hand, ~5 000 ≈ torso, ~10 000 ≈ full body.</div>
+        <input type="range" id="min_contour_area" name="min_contour_area"
+               min="100" max="20000" step="100" value="{{ cfg.min_contour_area }}"
+               oninput="show('min_contour_area-val', this.value, ' px²')">
+      </div>
+
+      <div class="field">
+        <div class="field-header">
+          <label for="cooldown_seconds">Cooldown</label>
+          <span class="field-value" id="cooldown_seconds-val">{{ cfg.cooldown_seconds | int }} s</span>
+        </div>
+        <div class="field-desc">Minimum time between saves. Prevents bursts of near-identical captures during prolonged movement.</div>
+        <input type="range" id="cooldown_seconds" name="cooldown_seconds"
+               min="1" max="120" step="1" value="{{ cfg.cooldown_seconds | int }}"
+               oninput="show('cooldown_seconds-val', this.value, ' s')">
+      </div>
+    </section>
+
+    <!-- STORAGE -->
+    <section>
+      <h2>Storage</h2>
+
+      <div class="field">
+        <div class="field-header"><label for="image_dir">Storage directory</label></div>
+        <div class="field-desc">Where captures are saved on disk. The directory is created automatically if it does not exist.</div>
+        <input type="text" id="image_dir" name="image_dir" value="{{ cfg.image_dir }}">
+      </div>
+
+      <div class="field">
+        <div class="field-header">
+          <label for="retention_days">Retention period</label>
+          <span class="field-value" id="retention_days-val">{{ cfg.retention_days }} days</span>
+        </div>
+        <div class="field-desc">Files older than this are deleted by a nightly cron job at 02:00.</div>
+        <input type="range" id="retention_days" name="retention_days"
+               min="7" max="365" step="1" value="{{ cfg.retention_days }}"
+               oninput="show('retention_days-val', this.value, ' days')">
+      </div>
+
+      <div class="field">
+        <div class="field-header">
+          <label for="min_free_pct">Minimum free disk space</label>
+          <span class="field-value" id="min_free_pct-val">{{ cfg.min_free_pct }}%</span>
+        </div>
+        <div class="field-desc">When free space drops below this threshold, the oldest captures are deleted automatically before each new save. Must be lower than the target.</div>
+        <input type="range" id="min_free_pct" name="min_free_pct"
+               min="1" max="30" step="1" value="{{ cfg.min_free_pct }}"
+               oninput="show('min_free_pct-val', this.value, '%')">
+      </div>
+
+      <div class="field">
+        <div class="field-header">
+          <label for="target_free_pct">Target free disk space</label>
+          <span class="field-value" id="target_free_pct-val">{{ cfg.target_free_pct }}%</span>
+        </div>
+        <div class="field-desc">Once a cleanup is triggered, old files are deleted until this much space is free. Setting this higher than the minimum reduces how often cleanup runs.</div>
+        <input type="range" id="target_free_pct" name="target_free_pct"
+               min="1" max="50" step="1" value="{{ cfg.target_free_pct }}"
+               oninput="show('target_free_pct-val', this.value, '%')">
+      </div>
+    </section>
+
+    <!-- WEB -->
+    <section>
+      <h2>Web server</h2>
+
+      <div class="field">
+        <div class="field-header"><label for="port">Port</label></div>
+        <div class="field-desc">Port the web UI listens on. Changing this requires the web server to restart — the page will reconnect automatically after ~3 seconds.</div>
+        <input type="number" id="port" name="port" min="1" max="65535" value="{{ cfg.port }}">
+      </div>
+
+      <div class="field">
+        <div class="field-header"><label for="host">Bind address</label></div>
+        <div class="field-desc"><code>0.0.0.0</code> listens on all network interfaces (accessible from any device on the local network). Use <code>127.0.0.1</code> to restrict access to the Pi itself.</div>
+        <input type="text" id="host" name="host" value="{{ cfg.host }}">
+      </div>
+
+      <div class="field">
+        <div class="field-header">
+          <label for="latest_count">Page size</label>
+          <span class="field-value" id="latest_count-val">{{ cfg.latest_count }} per page</span>
+        </div>
+        <div class="field-desc">How many captures are loaded at a time when scrolling through the gallery.</div>
+        <input type="range" id="latest_count" name="latest_count"
+               min="4" max="32" step="4" value="{{ cfg.latest_count }}"
+               oninput="show('latest_count-val', this.value, ' per page')">
+      </div>
+    </section>
+
+    <div class="actions">
+      <button type="submit">Save &amp; restart</button>
+    </div>
+
+  </form>
+</main>
+<script>
+  function show(id, val, suffix) {
+    document.getElementById(id).textContent = val + (suffix || '');
+  }
+  function toggleMovieDuration() {
+    const movie = document.getElementById('mode-movie').checked;
+    document.getElementById('movie-duration-field').style.display = movie ? 'block' : 'none';
+  }
+  // Set initial state
+  toggleMovieDuration();
+</script>
+</body>
+</html>
