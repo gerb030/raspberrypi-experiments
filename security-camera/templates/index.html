@@ -25,9 +25,7 @@
   }
   .date-nav a:hover { background: #222; }
   main { padding: 1.5rem; }
-  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: .75rem; }
-  @media (max-width: 900px) { .grid { grid-template-columns: repeat(2, 1fr); } }
-  @media (max-width: 500px) { .grid { grid-template-columns: 1fr; } }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax({{ card_size }}px, 1fr)); gap: .75rem; }
   .card {
     background: #1a1a1a; border: 1px solid #2a2a2a;
     border-radius: 6px; overflow: hidden; transition: border-color .15s;
@@ -60,12 +58,15 @@
   .empty { grid-column: 1 / -1; text-align: center; color: #555; padding: 4rem 0; font-size: 1rem; }
   #sentinel { height: 1px; }
   #loading { text-align: center; color: #555; font-size: .85rem; padding: 1.5rem 0; display: none; }
-  .dates-sidebar { margin-top: 2rem; border-top: 1px solid #222; padding-top: 1.5rem; }
-  .dates-sidebar h2 { font-size: .85rem; color: #666; text-transform: uppercase; letter-spacing: .08em; margin-bottom: .75rem; }
-  .dates-list { display: flex; flex-wrap: wrap; gap: .4rem; }
+  .dates-bar {
+    padding: .6rem 1.5rem; background: #141414; border-bottom: 1px solid #222;
+    display: flex; align-items: center; gap: .75rem; flex-wrap: wrap;
+  }
+  .dates-bar h2 { font-size: .75rem; color: #555; text-transform: uppercase; letter-spacing: .08em; white-space: nowrap; }
+  .dates-list { display: flex; flex-wrap: wrap; gap: .35rem; }
   .dates-list a {
-    color: #aaa; text-decoration: none; font-size: .82rem;
-    padding: .3rem .65rem; border: 1px solid #333; border-radius: 4px;
+    color: #aaa; text-decoration: none; font-size: .8rem;
+    padding: .25rem .6rem; border: 1px solid #333; border-radius: 4px;
   }
   .dates-list a:hover, .dates-list a.active { background: #2a2a2a; border-color: #555; color: #eee; }
   .stats-bar {
@@ -91,16 +92,16 @@
   <span>RAM: <strong>{{ stats.ram_gb }} GB</strong></span>
   <span>CPU: <strong>{{ stats.cpu_ghz }} GHz</strong></span>
 </div>
+<div class="dates-bar">
+  <h2>Browse by date</h2>
+  <div class="dates-list" id="dates-list">
+    <span style="color:#555;font-size:.8rem">Loading…</span>
+  </div>
+</div>
 <main>
   <div class="grid" id="grid"></div>
   <div id="loading">Loading…</div>
   <div id="sentinel"></div>
-  <div class="dates-sidebar">
-    <h2>Browse by date</h2>
-    <div class="dates-list" id="dates-list">
-      <span style="color:#555;font-size:.82rem">Loading…</span>
-    </div>
-  </div>
 </main>
 <script>
   const PAGE = 8;
@@ -119,6 +120,11 @@
     <line x1="12.5" y1="5.5" x2="5.5" y2="12.5" stroke="#aaa" stroke-width="1.5" stroke-linecap="round"/>
   </svg>`;
 
+  function fmtCardDate(d) {
+    const [y, m, day] = d.split('-').map(Number);
+    return new Date(y, m - 1, day).toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' });
+  }
+
   function makeCard(item) {
     const delBtn = `<button class="btn-delete" title="Delete" onclick="deleteItem(this, '${item.path}')">${deleteIcon}</button>`;
     const size = `<span class="card-size">${item.size}</span>`;
@@ -129,7 +135,7 @@
         <video src="/images/${item.path}" controls preload="none" playsinline ${poster}></video>
         <div class="card-info">
           <span class="badge badge-movie">video</span>
-          ${item.date} &nbsp; ${item.time}
+          ${fmtCardDate(item.date)} &nbsp; ${item.time}
           ${delBtn}
           ${size}
         </div>
@@ -140,7 +146,7 @@
         <img src="/images/${item.path}" alt="${item.date} ${item.time}" loading="lazy">
       </a>
       <div class="card-info">
-        ${item.date} &nbsp; ${item.time}
+        ${fmtCardDate(item.date)} &nbsp; ${item.time}
         ${delBtn}
         ${size}
       </div>
@@ -205,7 +211,7 @@
     const el = document.getElementById('dates-list');
     if (!dates.length) { el.innerHTML = '<span style="color:#555;font-size:.82rem">No captures yet.</span>'; return; }
     el.innerHTML = dates.map(d =>
-      `<a href="/date/${d}" class="${d === selectedDate ? 'active' : ''}">${d}</a>`
+      `<a href="/date/${d}" class="${d === selectedDate ? 'active' : ''}">${fmtCardDate(d)}</a>`
     ).join('');
   });
 </script>

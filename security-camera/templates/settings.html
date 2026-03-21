@@ -345,6 +345,17 @@
                min="4" max="32" step="4" value="{{ cfg.latest_count }}"
                oninput="show('latest_count-val', this.value, ' per page')">
       </div>
+
+      <div class="field">
+        <div class="field-header">
+          <label for="card_size">Card size</label>
+          <span class="field-value" id="card_size-val">{{ cfg.card_size }} px</span>
+        </div>
+        <div class="field-desc">Display width of each capture card in the gallery. Does not affect stored file sizes.</div>
+        <input type="range" id="card_size" name="card_size"
+               min="150" max="600" step="50" value="{{ cfg.card_size }}"
+               oninput="show('card_size-val', this.value, ' px')">
+      </div>
     </section>
 
     <div class="actions">

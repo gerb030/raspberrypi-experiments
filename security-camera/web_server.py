@@ -128,14 +128,18 @@ def get_camera_name() -> str:
 
 @app.route("/")
 def index():
+    cfg = load_cfg()
     return render_template("index.html", selected_date=None, title="Latest captures",
-                           camera_name=get_camera_name(), stats=get_system_stats())
+                           camera_name=get_camera_name(), stats=get_system_stats(),
+                           card_size=cfg.getint("web", "card_size", fallback=300))
 
 
 @app.route("/date/<date_str>")
 def by_date(date_str: str):
+    cfg = load_cfg()
     return render_template("index.html", selected_date=date_str, title=f"Captures on {date_str}",
-                           camera_name=get_camera_name(), stats=get_system_stats())
+                           camera_name=get_camera_name(), stats=get_system_stats(),
+                           card_size=cfg.getint("web", "card_size", fallback=300))
 
 
 @app.route("/api/images")
@@ -219,6 +223,7 @@ def read_config() -> dict:
         "host":                cfg.get("web",  "host"),
         "latest_count":        cfg.getint("web",  "latest_count"),
         "camera_name":         cfg.get("web",  "camera_name", fallback="Tula Security Camera"),
+        "card_size":           cfg.getint("web", "card_size", fallback=300),
     }
 
 
@@ -250,6 +255,7 @@ def write_config(values: dict) -> bool:
     cfg.set("web", "host",         values["host"])
     cfg.set("web", "latest_count", str(values["latest_count"]))
     cfg.set("web", "camera_name",  values["camera_name"])
+    cfg.set("web", "card_size", str(values["card_size"]))
 
     with open(CONFIG_PATH, "w") as f:
         cfg.write(f)
@@ -284,6 +290,7 @@ def parse_settings_form(form) -> dict:
         "host":                  form.get("host", "0.0.0.0"),
         "latest_count":          clamp(int(form.get("latest_count", 8)), 4, 32),
         "camera_name":           form.get("camera_name", "Tula Security Camera")[:80],
+        "card_size":             clamp(int(form.get("card_size", 300)), 150, 600),
     }
 
 

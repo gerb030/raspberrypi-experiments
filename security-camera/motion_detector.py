@@ -127,14 +127,14 @@ def record_movie(cam: Picamera2, image_dir: Path, duration: float,
     result_poster = subprocess.run(
         [
             "ffmpeg", "-y", "-i", str(out_path),
-            "-ss", seek, "-vframes", "1", "-update", "1", "-q:v", "3", str(poster_path),
+            "-ss", seek, "-vframes", "1", "-vf", "scale=800:-2", "-update", "1", "-q:v", "3", str(poster_path),
         ],
         capture_output=True,
     )
     if not poster_path.exists():
         # Fall back to first available frame
         subprocess.run(
-            ["ffmpeg", "-y", "-i", str(out_path), "-vframes", "1", "-update", "1", "-q:v", "3", str(poster_path)],
+            ["ffmpeg", "-y", "-i", str(out_path), "-vframes", "1", "-vf", "scale=800:-2", "-update", "1", "-q:v", "3", str(poster_path)],
             capture_output=True,
         )
 
