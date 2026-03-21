@@ -2,6 +2,8 @@
 """Flask web server for browsing security camera images."""
 
 import configparser
+import os
+import shutil
 import subprocess
 import threading
 import time
@@ -24,6 +26,53 @@ HOST = cfg.get("web", "host")
 PORT = cfg.getint("web", "port")
 
 app = Flask(__name__, template_folder="templates")
+
+
+def get_system_stats() -> dict:
+    cfg = load_cfg()
+    image_dir = cfg.get("storage", "image_dir")
+
+    # Disk space
+    try:
+        path = image_dir if Path(image_dir).exists() else "/"
+        usage = shutil.disk_usage(path)
+        disk_free_gb = usage.free / 1024 ** 3
+        disk_free_pct = usage.free / usage.total * 100
+    except Exception:
+        disk_free_gb, disk_free_pct = 0.0, 0.0
+
+    # Total RAM
+    ram_gb = 0.0
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    ram_gb = int(line.split()[1]) / 1024 ** 2
+                    break
+    except Exception:
+        pass
+
+    # CPU max frequency
+    cpu_ghz = None
+    try:
+        with open("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq") as f:
+            cpu_ghz = int(f.read().strip()) / 1_000_000
+    except Exception:
+        try:
+            with open("/proc/cpuinfo") as f:
+                for line in f:
+                    if line.startswith("cpu MHz"):
+                        cpu_ghz = float(line.split(":")[1].strip()) / 1000
+                        break
+        except Exception:
+            pass
+
+    return {
+        "disk_free_gb":  f"{disk_free_gb:.1f}",
+        "disk_free_pct": f"{disk_free_pct:.0f}",
+        "ram_gb":        f"{ram_gb:.1f}",
+        "cpu_ghz":       f"{cpu_ghz:.2f}" if cpu_ghz else "N/A",
+    }
 
 
 def human_size(n: int) -> str:
@@ -72,14 +121,21 @@ def get_dates() -> list[str]:
     )
 
 
+def get_camera_name() -> str:
+    cfg = load_cfg()
+    return cfg.get("web", "camera_name", fallback="Tula Security Camera")
+
+
 @app.route("/")
 def index():
-    return render_template("index.html", selected_date=None, title="Latest captures")
+    return render_template("index.html", selected_date=None, title="Latest captures",
+                           camera_name=get_camera_name(), stats=get_system_stats())
 
 
 @app.route("/date/<date_str>")
 def by_date(date_str: str):
-    return render_template("index.html", selected_date=date_str, title=f"Captures on {date_str}")
+    return render_template("index.html", selected_date=date_str, title=f"Captures on {date_str}",
+                           camera_name=get_camera_name(), stats=get_system_stats())
 
 
 @app.route("/api/images")
@@ -162,6 +218,7 @@ def read_config() -> dict:
         "port":                cfg.getint("web",  "port"),
         "host":                cfg.get("web",  "host"),
         "latest_count":        cfg.getint("web",  "latest_count"),
+        "camera_name":         cfg.get("web",  "camera_name", fallback="Tula Security Camera"),
     }
 
 
@@ -192,6 +249,7 @@ def write_config(values: dict) -> bool:
     cfg.set("web", "port",         str(values["port"]))
     cfg.set("web", "host",         values["host"])
     cfg.set("web", "latest_count", str(values["latest_count"]))
+    cfg.set("web", "camera_name",  values["camera_name"])
 
     with open(CONFIG_PATH, "w") as f:
         cfg.write(f)
@@ -225,6 +283,7 @@ def parse_settings_form(form) -> dict:
         "port":                  clamp(int(form.get("port", 80)), 1, 65535),
         "host":                  form.get("host", "0.0.0.0"),
         "latest_count":          clamp(int(form.get("latest_count", 8)), 4, 32),
+        "camera_name":           form.get("camera_name", "Tula Security Camera")[:80],
     }
 
 
@@ -239,6 +298,7 @@ def settings():
         awb_modes=AWB_MODES,
         saved=saved,
         web_restarting=web_restarting,
+        stats=get_system_stats(),
     )
 
 

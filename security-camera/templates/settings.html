@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Tula Security Camera — Settings</title>
+<title>{{ cfg.camera_name }} — Settings</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: #111; color: #ddd; font-family: system-ui, sans-serif; min-height: 100vh; }
@@ -19,6 +19,13 @@
   }
   header nav a:hover { background: #222; }
   header nav a.active { border-color: #666; color: #eee; background: #222; }
+  .stats-bar {
+    width: 100%; display: flex; gap: 1.25rem; flex-wrap: wrap;
+    padding: .45rem 1.5rem; background: #141414; border-bottom: 1px solid #222;
+    font-size: .78rem; color: #666;
+  }
+  .stats-bar span { white-space: nowrap; }
+  .stats-bar strong { color: #999; font-weight: 500; }
 
   main { max-width: 760px; margin: 0 auto; padding: 2rem 1.5rem; }
 
@@ -101,12 +108,17 @@
 </head>
 <body>
 <header>
-  <h1>Tula Security Camera</h1>
+  <h1>{{ cfg.camera_name }}</h1>
   <nav>
     <a href="/">Captures</a>
     <a href="/settings" class="active">Settings</a>
   </nav>
 </header>
+<div class="stats-bar">
+  <span>Disk: <strong>{{ stats.disk_free_gb }} GB free</strong> ({{ stats.disk_free_pct }}%)</span>
+  <span>RAM: <strong>{{ stats.ram_gb }} GB</strong></span>
+  <span>CPU: <strong>{{ stats.cpu_ghz }} GHz</strong></span>
+</div>
 <main>
 
   {% if saved %}
@@ -117,6 +129,17 @@
   {% endif %}
 
   <form method="POST" action="/settings">
+
+    <!-- GENERAL -->
+    <section>
+      <h2>General</h2>
+      <div class="field">
+        <div class="field-header"><label for="camera_name">Camera name</label></div>
+        <div class="field-desc">Displayed in the header on all pages. Maximum 80 characters.</div>
+        <input type="text" id="camera_name" name="camera_name"
+               maxlength="80" value="{{ cfg.camera_name }}">
+      </div>
+    </section>
 
     <!-- CAMERA -->
     <section>

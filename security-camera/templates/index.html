@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Tula Security Camera</title>
+<title>{{ camera_name }}</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: #111; color: #ddd; font-family: system-ui, sans-serif; min-height: 100vh; }
@@ -68,17 +68,29 @@
     padding: .3rem .65rem; border: 1px solid #333; border-radius: 4px;
   }
   .dates-list a:hover, .dates-list a.active { background: #2a2a2a; border-color: #555; color: #eee; }
+  .stats-bar {
+    width: 100%; display: flex; gap: 1.25rem; flex-wrap: wrap;
+    padding: .45rem 1.5rem; background: #141414; border-bottom: 1px solid #222;
+    font-size: .78rem; color: #666;
+  }
+  .stats-bar span { white-space: nowrap; }
+  .stats-bar strong { color: #999; font-weight: 500; }
 </style>
 </head>
 <body>
 <header>
-  <h1>Tula Security Camera <span>{{ title }}</span></h1>
+  <h1>{{ camera_name }} <span>{{ title }}</span></h1>
   <div class="date-nav">
     <a href="/">Latest</a>
     <a href="/settings">Settings</a>
     <input type="date" id="date-picker" {% if selected_date %}value="{{ selected_date }}"{% endif %}>
   </div>
 </header>
+<div class="stats-bar">
+  <span>Disk: <strong>{{ stats.disk_free_gb }} GB free</strong> ({{ stats.disk_free_pct }}%)</span>
+  <span>RAM: <strong>{{ stats.ram_gb }} GB</strong></span>
+  <span>CPU: <strong>{{ stats.cpu_ghz }} GHz</strong></span>
+</div>
 <main>
   <div class="grid" id="grid"></div>
   <div id="loading">Loading…</div>
