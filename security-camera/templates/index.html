@@ -49,12 +49,15 @@
   .badge-movie { background: #2a1f00; color: #c8900a; border: 1px solid #5a3d00; }
   .card-info { flex-wrap: wrap; }
   .card-size { width: 100%; font-size: .72rem; color: #555; padding: .1rem 0 .25rem; }
-  .btn-delete {
+  .card-actions { display: flex; align-items: center; gap: .15rem; width: 100%; margin-top: .1rem; }
+  .card-actions .card-size { margin-right: auto; }
+  .btn-action {
     background: none; border: none; cursor: pointer; padding: 2px;
-    margin-left: auto; opacity: .35; transition: opacity .15s; flex-shrink: 0;
+    opacity: .35; transition: opacity .15s; flex-shrink: 0; display: block; text-decoration: none;
   }
-  .btn-delete:hover { opacity: .75; }
-  .btn-delete svg { display: block; }
+  .btn-action:hover { opacity: .75; }
+  .btn-action svg { display: block; }
+  .btn-action.fav-on { opacity: .8; }
   .empty { grid-column: 1 / -1; text-align: center; color: #555; padding: 4rem 0; font-size: 1rem; }
   #sentinel { height: 1px; }
   #loading { text-align: center; color: #555; font-size: .85rem; padding: 1.5rem 0; display: none; }
@@ -120,14 +123,48 @@
     <line x1="12.5" y1="5.5" x2="5.5" y2="12.5" stroke="#aaa" stroke-width="1.5" stroke-linecap="round"/>
   </svg>`;
 
+  const downloadIcon = `<svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="9" cy="9" r="8" stroke="#aaa" stroke-width="1.5"/>
+    <line x1="9" y1="4.5" x2="9" y2="10.5" stroke="#aaa" stroke-width="1.5" stroke-linecap="round"/>
+    <polyline points="6.5,8.5 9,12 11.5,8.5" stroke="#aaa" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <line x1="5.5" y1="13.5" x2="12.5" y2="13.5" stroke="#aaa" stroke-width="1.5" stroke-linecap="round"/>
+  </svg>`;
+
+  const heartEmpty = `<svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M9 13.5C9 13.5 3.5 10 3.5 6.5C3.5 4.6 4.9 3.5 6.5 3.5C7.6 3.5 8.5 4.1 9 4.9C9.5 4.1 10.4 3.5 11.5 3.5C13.1 3.5 14.5 4.6 14.5 6.5C14.5 10 9 13.5 9 13.5Z" stroke="#aaa" stroke-width="1.5" stroke-linejoin="round"/>
+  </svg>`;
+
+  const heartFilled = `<svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M9 13.5C9 13.5 3.5 10 3.5 6.5C3.5 4.6 4.9 3.5 6.5 3.5C7.6 3.5 8.5 4.1 9 4.9C9.5 4.1 10.4 3.5 11.5 3.5C13.1 3.5 14.5 4.6 14.5 6.5C14.5 10 9 13.5 9 13.5Z" fill="#e04060" stroke="#e04060" stroke-width="1.5" stroke-linejoin="round"/>
+  </svg>`;
+
+  const FAVS_KEY = 'sc_favourites';
+  function getFavs() { return new Set(JSON.parse(localStorage.getItem(FAVS_KEY) || '[]')); }
+  function saveFavs(s) { localStorage.setItem(FAVS_KEY, JSON.stringify([...s])); }
+  function isFav(path) { return getFavs().has(path); }
+  function toggleFav(btn, path) {
+    const favs = getFavs();
+    const wasOn = favs.has(path);
+    wasOn ? favs.delete(path) : favs.add(path);
+    saveFavs(favs);
+    btn.classList.toggle('fav-on', !wasOn);
+    btn.title = wasOn ? 'Favourite' : 'Unfavourite';
+    btn.innerHTML = wasOn ? heartEmpty : heartFilled;
+  }
+
   function fmtCardDate(d) {
     const [y, m, day] = d.split('-').map(Number);
     return new Date(y, m - 1, day).toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' });
   }
 
   function makeCard(item) {
-    const delBtn = `<button class="btn-delete" title="Delete" onclick="deleteItem(this, '${item.path}')">${deleteIcon}</button>`;
-    const size = `<span class="card-size">${item.size}</span>`;
+    const fav = isFav(item.path);
+    const actions = `<span class="card-actions">
+      <span class="card-size">${item.size}</span>
+      <button class="btn-action ${fav ? 'fav-on' : ''}" title="${fav ? 'Unfavourite' : 'Favourite'}" onclick="toggleFav(this, '${item.path}')">${fav ? heartFilled : heartEmpty}</button>
+      <a class="btn-action" href="/images/${item.path}" download title="Download">${downloadIcon}</a>
+      <button class="btn-action" title="Delete" onclick="deleteItem(this, '${item.path}')">${deleteIcon}</button>
+    </span>`;
 
     if (item.type === 'movie') {
       const poster = item.poster ? `poster="/images/${item.poster}"` : '';
@@ -136,8 +173,7 @@
         <div class="card-info">
           <span class="badge badge-movie">video</span>
           ${fmtCardDate(item.date)} &nbsp; ${item.time}
-          ${delBtn}
-          ${size}
+          ${actions}
         </div>
       </div>`;
     }
@@ -147,14 +183,12 @@
       </a>
       <div class="card-info">
         ${fmtCardDate(item.date)} &nbsp; ${item.time}
-        ${delBtn}
-        ${size}
+        ${actions}
       </div>
     </div>`;
   }
 
   async function deleteItem(btn, path) {
-    if (!confirm('Delete this capture?')) return;
     const card = btn.closest('.card');
     card.style.opacity = '.4';
     const res = await fetch(`/api/images/${path}`, { method: 'DELETE' });

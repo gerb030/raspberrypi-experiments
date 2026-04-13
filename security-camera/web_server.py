@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Flask web server for browsing security camera images."""
 
+import base64
 import configparser
 import os
 import shutil
@@ -26,6 +27,15 @@ HOST = cfg.get("web", "host")
 PORT = cfg.getint("web", "port")
 
 app = Flask(__name__, template_folder="templates")
+
+
+def get_camera_model() -> str:
+    try:
+        from picamera2 import Picamera2
+        info = Picamera2.global_camera_info()
+        return info[0]['Model'] if info else 'unknown'
+    except Exception:
+        return 'unknown'
 
 
 def get_system_stats() -> dict:
@@ -190,12 +200,25 @@ def delete_image(filename: str):
 # Settings
 # ---------------------------------------------------------------------------
 
-RESOLUTIONS = [
+RESOLUTIONS_IMX219 = [
     (640, 480),
     (1280, 720),
     (1640, 1232),
     (1920, 1080),
+    (3280, 2464),
+]
+
+RESOLUTIONS_OV5647 = [
+    (640, 480),
+    (1296, 972),
+    (1920, 1080),
     (2592, 1944),
+]
+
+RESOLUTIONS_DEFAULT = [
+    (640, 480),
+    (1280, 720),
+    (1920, 1080),
 ]
 
 AWB_MODES = ["Auto", "Tungsten", "Fluorescent", "Indoor", "Daylight", "Cloudy"]
@@ -210,6 +233,14 @@ def read_config() -> dict:
         "brightness":          cfg.getfloat("camera", "brightness",  fallback=0.0),
         "contrast":            cfg.getfloat("camera", "contrast",    fallback=1.0),
         "awb_mode":            cfg.get("camera",  "awb_mode",        fallback="Auto"),
+        "awb_enable":          cfg.getboolean("camera", "awb_enable", fallback=True),
+        "colour_gain_r":       cfg.getfloat("camera", "colour_gain_r", fallback=2.0),
+        "colour_gain_b":       cfg.getfloat("camera", "colour_gain_b", fallback=2.0),
+        "sharpness":           cfg.getfloat("camera", "sharpness",    fallback=1.0),
+        "noise_reduction":     cfg.getint("camera",  "noise_reduction", fallback=0),
+        "exposure_value":      cfg.getfloat("camera", "exposure_value", fallback=0.0),
+        "noir":                cfg.getboolean("camera", "noir",       fallback=False),
+        "rotation":            cfg.getint("camera", "rotation",       fallback=0),
         "sensitivity_threshold": cfg.getint("motion", "sensitivity_threshold"),
         "min_contour_area":    cfg.getint("motion",  "min_contour_area"),
         "cooldown_seconds":    cfg.getfloat("motion", "cooldown_seconds"),
@@ -239,6 +270,14 @@ def write_config(values: dict) -> bool:
     cfg.set("camera", "brightness",        str(values["brightness"]))
     cfg.set("camera", "contrast",          str(values["contrast"]))
     cfg.set("camera", "awb_mode",          values["awb_mode"])
+    cfg.set("camera", "awb_enable",        str(values["awb_enable"]).lower())
+    cfg.set("camera", "colour_gain_r",     str(values["colour_gain_r"]))
+    cfg.set("camera", "colour_gain_b",     str(values["colour_gain_b"]))
+    cfg.set("camera", "sharpness",         str(values["sharpness"]))
+    cfg.set("camera", "noise_reduction",   str(values["noise_reduction"]))
+    cfg.set("camera", "exposure_value",    str(values["exposure_value"]))
+    cfg.set("camera", "noir",              str(values["noir"]).lower())
+    cfg.set("camera", "rotation",          str(values["rotation"]))
     cfg.set("motion", "sensitivity_threshold", str(values["sensitivity_threshold"]))
     cfg.set("motion", "min_contour_area",  str(values["min_contour_area"]))
     cfg.set("motion", "cooldown_seconds",  str(values["cooldown_seconds"]))
@@ -277,13 +316,21 @@ def parse_settings_form(form) -> dict:
         "brightness":            clamp(round(float(form.get("brightness", 0.0)), 2), -1.0, 1.0),
         "contrast":              clamp(round(float(form.get("contrast", 1.0)), 2), 0.5, 4.0),
         "awb_mode":              form.get("awb_mode", "Auto") if form.get("awb_mode") in AWB_MODES else "Auto",
+        "awb_enable":            form.get("awb_enable") == "on",
+        "colour_gain_r":         clamp(round(float(form.get("colour_gain_r", 2.0)), 2), 0.0, 32.0),
+        "colour_gain_b":         clamp(round(float(form.get("colour_gain_b", 2.0)), 2), 0.0, 32.0),
+        "sharpness":             clamp(round(float(form.get("sharpness", 1.0)), 1), 0.0, 16.0),
+        "noise_reduction":       clamp(int(form.get("noise_reduction", 0)), 0, 4),
+        "exposure_value":        clamp(round(float(form.get("exposure_value", 0.0)), 1), -8.0, 8.0),
+        "noir":                  form.get("noir") == "on",
+        "rotation":              int(form.get("rotation", 0)) if int(form.get("rotation", 0)) in (0, 90, 180, 270) else 0,
         "sensitivity_threshold": clamp(int(form.get("sensitivity_threshold", 25)), 5, 200),
         "min_contour_area":      clamp(int(form.get("min_contour_area", 1500)), 100, 20000),
         "cooldown_seconds":      clamp(int(form.get("cooldown_seconds", 10)), 1, 120),
         "capture_mode":          form.get("capture_mode", "still") if form.get("capture_mode") in ("still", "movie") else "still",
         "movie_duration":        clamp(int(form.get("movie_duration", 10)), 3, 120),
         "image_dir":             form.get("image_dir", "/home/pi/Pictures/motion"),
-        "retention_days":        clamp(int(form.get("retention_days", 90)), 7, 365),
+        "retention_days":        clamp(int(form.get("retention_days", 90)), 1, 365),
         "min_free_pct":          clamp(int(form.get("min_free_pct", 5)), 1, 30),
         "target_free_pct":       clamp(int(form.get("target_free_pct", 15)), 1, 50),
         "port":                  clamp(int(form.get("port", 80)), 1, 65535),
@@ -294,18 +341,28 @@ def parse_settings_form(form) -> dict:
     }
 
 
+def get_resolutions(model: str) -> list:
+    if model == "imx219":
+        return RESOLUTIONS_IMX219
+    elif model == "ov5647":
+        return RESOLUTIONS_OV5647
+    return RESOLUTIONS_DEFAULT
+
+
 @app.route("/settings", methods=["GET"])
 def settings():
     saved = request.args.get("saved")
     web_restarting = request.args.get("web_restarting")
+    model = get_camera_model()
     return render_template(
         "settings.html",
         cfg=read_config(),
-        resolutions=[f"{w} x {h}" for w, h in RESOLUTIONS],
+        resolutions=[f"{w} x {h}" for w, h in get_resolutions(model)],
         awb_modes=AWB_MODES,
         saved=saved,
         web_restarting=web_restarting,
         stats=get_system_stats(),
+        camera_model=model,
     )
 
 
@@ -326,6 +383,64 @@ def settings_save():
         return redirect(url_for("settings", saved=1, web_restarting=1))
 
     return redirect(url_for("settings", saved=1))
+
+
+@app.route("/api/preview", methods=["POST"])
+def api_preview():
+    values = parse_settings_form(request.form)
+
+    # Stop the motion detector so it releases the camera
+    subprocess.run(["sudo", "systemctl", "stop", "security-camera"], capture_output=True)
+    time.sleep(1.5)
+
+    try:
+        import cv2
+        from libcamera import Transform
+        from picamera2 import Picamera2
+
+        res_w, res_h = (int(x.strip()) for x in values["resolution"].split("x"))
+        awb_map = {"Auto": 0, "Tungsten": 1, "Fluorescent": 2, "Indoor": 3, "Daylight": 4, "Cloudy": 5}
+        controls = {
+            "Saturation":        float(values["saturation"]),
+            "Brightness":        float(values["brightness"]),
+            "Contrast":          float(values["contrast"]),
+            "Sharpness":         float(values["sharpness"]),
+            "NoiseReductionMode": int(values["noise_reduction"]),
+            "ExposureValue":     float(values["exposure_value"]),
+            "AwbEnable":         bool(values["awb_enable"]),
+            "AwbMode":           awb_map.get(values["awb_mode"], 0),
+        }
+        if not values["awb_enable"]:
+            controls["ColourGains"] = (float(values["colour_gain_r"]), float(values["colour_gain_b"]))
+
+        cam = Picamera2()
+        cfg = cam.create_still_configuration(
+            main={"size": (res_w, res_h), "format": "RGB888"},
+            transform=Transform(rotation=int(values["rotation"])),
+            controls=controls,
+        )
+        cam.configure(cfg)
+        cam.start()
+        time.sleep(2)
+        frame = cam.capture_array()
+        cam.stop()
+        cam.close()
+
+        # Scale down for preview (max 1200 px wide)
+        h, w = frame.shape[:2]
+        if w > 1200:
+            frame = cv2.resize(frame, (1200, int(h * 1200 / w)))
+
+        # picamera2 RGB888 delivers BGR bytes — encode directly
+        _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        b64 = base64.b64encode(buf).decode()
+        return jsonify({"image": f"data:image/jpeg;base64,{b64}"})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        subprocess.run(["sudo", "systemctl", "start", "security-camera"], capture_output=True)
 
 
 if __name__ == "__main__":

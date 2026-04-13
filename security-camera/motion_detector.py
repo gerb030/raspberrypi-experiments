@@ -13,6 +13,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from libcamera import Transform
 from picamera2 import Picamera2
 
 logging.basicConfig(
@@ -60,6 +61,34 @@ def evict_oldest(image_dir: Path) -> None:
         pass
 
 
+def enforce_retention(image_dir: Path, retention_days: int) -> None:
+    """Delete files that have exceeded the retention period."""
+    cutoff = time.time() - retention_days * 86400
+    # Delete expired movies and their poster frames together
+    for f in sorted(image_dir.glob("**/*.mp4"), key=lambda p: p.stat().st_mtime):
+        if f.stat().st_mtime < cutoff:
+            f.unlink()
+            poster = f.with_suffix(".jpg")
+            if poster.exists():
+                poster.unlink()
+            log.info("Retention expired — deleted: %s", f)
+            try:
+                f.parent.rmdir()
+            except OSError:
+                pass
+    # Delete expired stills (skip poster JPGs — already handled above)
+    for f in sorted(image_dir.glob("**/*.jpg"), key=lambda p: p.stat().st_mtime):
+        if not f.exists():
+            continue
+        if f.stat().st_mtime < cutoff and not f.with_suffix(".mp4").exists():
+            f.unlink()
+            log.info("Retention expired — deleted: %s", f)
+            try:
+                f.parent.rmdir()
+            except OSError:
+                pass
+
+
 def enforce_disk_space(image_dir: Path) -> None:
     """If free space drops below MIN_FREE_PCT, delete oldest files until TARGET_FREE_PCT is reached."""
     if free_disk_pct(image_dir) >= MIN_FREE_PCT:
@@ -74,18 +103,18 @@ def enforce_disk_space(image_dir: Path) -> None:
             break
 
 
-def save_still(frame_rgb: np.ndarray, image_dir: Path) -> Path:
+def save_still(frame_bgr: np.ndarray, image_dir: Path) -> Path:
     now = datetime.now()
     date_dir = image_dir / now.strftime("%Y-%m-%d")
     date_dir.mkdir(parents=True, exist_ok=True)
     filename = date_dir / now.strftime("%H-%M-%S.jpg")
-    bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-    cv2.imwrite(str(filename), bgr, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    cv2.imwrite(str(filename), frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 90])
     return filename
 
 
 def record_movie(cam: Picamera2, image_dir: Path, duration: float,
-                 width: int, height: int, framerate: int) -> Path:
+                 width: int, height: int, framerate: int,
+                 bgr_native: bool = False) -> Path:
     """Capture frames into a temp AVI then re-encode to H264 MP4."""
     now = datetime.now()
     date_dir = image_dir / now.strftime("%Y-%m-%d")
@@ -101,8 +130,7 @@ def record_movie(cam: Picamera2, image_dir: Path, duration: float,
     end_time = time.monotonic() + duration
     while time.monotonic() < end_time:
         frame = cam.capture_array()
-        bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-        writer.write(bgr)
+        writer.write(frame if bgr_native else cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
 
     writer.release()
 
@@ -110,7 +138,8 @@ def record_movie(cam: Picamera2, image_dir: Path, duration: float,
     result = subprocess.run(
         [
             "ffmpeg", "-y", "-i", str(tmp_path),
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "28",
+            "-movflags", "+faststart",
             str(out_path),
         ],
         capture_output=True,
@@ -132,7 +161,6 @@ def record_movie(cam: Picamera2, image_dir: Path, duration: float,
         capture_output=True,
     )
     if not poster_path.exists():
-        # Fall back to first available frame
         subprocess.run(
             ["ffmpeg", "-y", "-i", str(out_path), "-vframes", "1", "-vf", "scale=800:-2", "-update", "1", "-q:v", "3", str(poster_path)],
             capture_output=True,
@@ -150,7 +178,14 @@ def run():
     saturation = cfg.getfloat("camera", "saturation", fallback=1.0)
     brightness = cfg.getfloat("camera", "brightness", fallback=0.0)
     contrast = cfg.getfloat("camera", "contrast", fallback=1.0)
+    sharpness = cfg.getfloat("camera", "sharpness", fallback=1.0)
+    noise_reduction = cfg.getint("camera", "noise_reduction", fallback=0)
+    exposure_value = cfg.getfloat("camera", "exposure_value", fallback=0.0)
+    awb_enable = cfg.getboolean("camera", "awb_enable", fallback=True)
+    colour_gain_r = cfg.getfloat("camera", "colour_gain_r", fallback=2.0)
+    colour_gain_b = cfg.getfloat("camera", "colour_gain_b", fallback=2.0)
     awb_mode_name = cfg.get("camera", "awb_mode", fallback="Auto").strip()
+    rotation = cfg.getint("camera", "rotation", fallback=0)
     threshold = cfg.getint("motion", "sensitivity_threshold")
     min_area = cfg.getint("motion", "min_contour_area")
     cooldown = cfg.getfloat("motion", "cooldown_seconds")
@@ -158,6 +193,7 @@ def run():
     movie_duration = cfg.getfloat("motion", "movie_duration", fallback=10.0)
     image_dir = Path(cfg.get("storage", "image_dir"))
     image_dir.mkdir(parents=True, exist_ok=True)
+    retention_days = cfg.getint("storage", "retention_days", fallback=90)
 
     global MIN_FREE_PCT, TARGET_FREE_PCT
     MIN_FREE_PCT = cfg.getfloat("storage", "min_free_pct", fallback=5.0)
@@ -175,16 +211,36 @@ def run():
     }
     awb_mode = awb_modes.get(awb_mode_name, 0)
 
+    # Detect camera model for logging; picamera2's RGB888 format always delivers
+    # BGR byte order on Raspberry Pi (libcamera maps RGB888 → V4L2 RGB24 = B,G,R).
+    # No channel conversion is needed before cv2.imwrite or VideoWriter.
+    try:
+        camera_info = Picamera2.global_camera_info()
+        camera_model = camera_info[0]['Model'] if camera_info else 'unknown'
+    except Exception:
+        camera_model = 'unknown'
+    bgr_native = True
+    log.info("Camera model: %s", camera_model)
+
+    controls = {
+        "FrameRate": framerate,
+        "Saturation": saturation,
+        "Brightness": brightness,
+        "Contrast": contrast,
+        "Sharpness": sharpness,
+        "NoiseReductionMode": noise_reduction,
+        "ExposureValue": exposure_value,
+        "AwbEnable": awb_enable,
+        "AwbMode": awb_mode,
+    }
+    if not awb_enable:
+        controls["ColourGains"] = (colour_gain_r, colour_gain_b)
+
     cam = Picamera2()
     config = cam.create_video_configuration(
         main={"size": (width, height), "format": "RGB888"},
-        controls={
-            "FrameRate": framerate,
-            "Saturation": saturation,
-            "Brightness": brightness,
-            "Contrast": contrast,
-            "AwbMode": awb_mode,
-        },
+        transform=Transform(rotation=rotation),
+        controls=controls,
     )
     cam.configure(config)
 
@@ -203,6 +259,7 @@ def run():
     # Warm up
     time.sleep(2)
 
+    gray_conversion = cv2.COLOR_BGR2GRAY if bgr_native else cv2.COLOR_RGB2GRAY
     fgbg = cv2.createBackgroundSubtractorMOG2(
         history=500, varThreshold=threshold, detectShadows=False
     )
@@ -213,7 +270,7 @@ def run():
     while True:
         frame = cam.capture_array()
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+        gray = cv2.cvtColor(frame, gray_conversion)
         gray = cv2.GaussianBlur(gray, (21, 21), 0)
 
         mask = fgbg.apply(gray)
@@ -226,11 +283,13 @@ def run():
         if motion_detected:
             now = time.monotonic()
             if now - last_save >= cooldown:
+                enforce_retention(image_dir, retention_days)
                 enforce_disk_space(image_dir)
                 if capture_mode == "movie":
-                    path = record_movie(cam, image_dir, movie_duration, width, height, framerate)
+                    path = record_movie(cam, image_dir, movie_duration, width, height, framerate, bgr_native)
                 else:
-                    path = save_still(frame, image_dir)
+                    frame_bgr = frame if bgr_native else cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                    path = save_still(frame_bgr, image_dir)
                 if path:
                     log.info("Motion detected — saved %s", path)
                 # Cooldown starts after capture finishes

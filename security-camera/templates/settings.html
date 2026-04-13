@@ -98,12 +98,42 @@
   /* Movie duration — only shown in movie mode */
   #movie-duration-field { display: none; }
 
-  .actions { display: flex; justify-content: flex-end; padding-top: .5rem; }
+  .actions { display: flex; justify-content: flex-end; align-items: center; gap: .75rem; padding-top: .5rem; }
   button[type="submit"] {
     background: #eee; color: #111; border: none; font-size: .9rem;
     font-weight: 600; padding: .6rem 1.6rem; border-radius: 5px; cursor: pointer;
   }
   button[type="submit"]:hover { background: #fff; }
+  #btn-preview {
+    background: none; color: #aaa; border: 1px solid #444; font-size: .9rem;
+    font-weight: 500; padding: .6rem 1.6rem; border-radius: 5px; cursor: pointer;
+    margin-right: auto;
+  }
+  #btn-preview:hover { border-color: #666; color: #eee; }
+
+  /* Preview modal */
+  #preview-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.88);
+    display: flex; align-items: center; justify-content: center; z-index: 200;
+  }
+  #preview-dialog {
+    background: #1a1a1a; border: 1px solid #333; border-radius: 8px;
+    padding: 1.25rem; max-width: min(92vw, 900px);
+    display: flex; flex-direction: column; gap: .85rem; align-items: center;
+  }
+  #preview-img { max-width: 100%; max-height: 70vh; border-radius: 4px; display: block; }
+  #preview-loading { width: 80px; height: 80px; }
+  #preview-status { font-size: .9rem; color: #888; }
+  #btn-preview-ok {
+    background: #eee; color: #111; border: none; font-size: .9rem;
+    font-weight: 600; padding: .55rem 2rem; border-radius: 5px; cursor: pointer;
+  }
+  #btn-preview-ok:hover { background: #fff; }
+
+  /* Checkbox row */
+  .check-row { display: flex; align-items: center; gap: .5rem; margin-top: .25rem; }
+  .check-row input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #eee; flex-shrink: 0; }
+  .check-row label { font-size: .9rem; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -128,6 +158,9 @@
   <div class="toast warn">&#9888; Web server port/host changed — restarting in a moment. Reconnect if the page stops responding.</div>
   {% endif %}
 
+  {% set is_imx219 = camera_model == 'imx219' %}
+  {% set is_color = camera_model == 'ov5647' or (camera_model == 'imx219' and not cfg.noir) %}
+
   <form method="POST" action="/settings">
 
     <!-- GENERAL -->
@@ -143,7 +176,7 @@
 
     <!-- CAMERA -->
     <section>
-      <h2>Camera</h2>
+      <h2>Camera{% if camera_model != 'unknown' %}<span style="font-weight:400;text-transform:none;letter-spacing:0;color:#666;margin-left:.6rem;font-size:.75rem">{{ camera_model }}</span>{% endif %}</h2>
 
       <div class="field">
         <div class="field-header"><label for="resolution">Resolution</label></div>
@@ -166,16 +199,20 @@
                oninput="show('framerate-val', this.value, ' fps')">
       </div>
 
+      {% if is_color %}
       <div class="field">
         <div class="field-header">
           <label for="saturation">Saturation</label>
           <span class="field-value" id="saturation-val">{{ cfg.saturation }}</span>
         </div>
-        <div class="field-desc">Colour intensity. Set to <strong>0.0</strong> for greyscale — recommended for NoIR cameras which have no IR cut filter and produce a purple/blue cast in colour mode.</div>
+        <div class="field-desc">Colour intensity. 1.0 is default; 0.0 produces greyscale.</div>
         <input type="range" id="saturation" name="saturation"
                min="0.0" max="2.0" step="0.05" value="{{ cfg.saturation }}"
                oninput="show('saturation-val', parseFloat(this.value).toFixed(2))">
       </div>
+      {% else %}
+      <input type="hidden" name="saturation" value="{{ cfg.saturation }}">
+      {% endif %}
 
       <div class="field">
         <div class="field-header">
@@ -193,20 +230,117 @@
           <label for="contrast">Contrast</label>
           <span class="field-value" id="contrast-val">{{ cfg.contrast }}</span>
         </div>
-        <div class="field-desc">Tonal range multiplier. 1.0 is unchanged. Increase to make dark areas darker and bright areas brighter — useful in low-light scenes.</div>
+        <div class="field-desc">Tonal range multiplier. 1.0 is unchanged. Increase to make dark areas darker and bright areas brighter.</div>
         <input type="range" id="contrast" name="contrast"
                min="0.5" max="4.0" step="0.1" value="{{ cfg.contrast }}"
                oninput="show('contrast-val', parseFloat(this.value).toFixed(1))">
       </div>
 
+      {% if is_imx219 or is_color %}
       <div class="field">
-        <div class="field-header"><label for="awb_mode">White balance</label></div>
-        <div class="field-desc">Auto white balance preset. Has no effect when saturation is 0 (greyscale). <em>Tungsten</em> or <em>Indoor</em> can reduce blue cast under IR lighting.</div>
+        <div class="field-header"><label>White balance</label></div>
+        <div class="field-desc">Auto white balance adjusts colour temperature automatically. Disable to set manual colour gains.{% if not is_color %} On a NoIR camera this affects tonal rendering even in greyscale.{% endif %}</div>
+        <div class="check-row">
+          <input type="checkbox" id="awb_enable" name="awb_enable"
+                 {% if cfg.awb_enable %}checked{% endif %} onchange="toggleAwb()">
+          <label for="awb_enable">Auto white balance enabled</label>
+        </div>
+      </div>
+
+      <div class="field" id="awb-mode-field">
+        <div class="field-header"><label for="awb_mode">AWB preset</label></div>
+        <div class="field-desc"><em>Tungsten</em> or <em>Indoor</em> can reduce blue cast under IR lighting.</div>
         <select id="awb_mode" name="awb_mode">
           {% for m in awb_modes %}
           <option value="{{ m }}" {% if cfg.awb_mode == m %}selected{% endif %}>{{ m }}</option>
           {% endfor %}
         </select>
+      </div>
+
+      <div class="field" id="awb-gains-r-field">
+        <div class="field-header">
+          <label for="colour_gain_r">Red gain</label>
+          <span class="field-value" id="colour_gain_r-val">{{ cfg.colour_gain_r }}</span>
+        </div>
+        <div class="field-desc">Manual red channel gain (0–32). Active when auto white balance is disabled.</div>
+        <input type="range" id="colour_gain_r" name="colour_gain_r"
+               min="0.0" max="32.0" step="0.1" value="{{ cfg.colour_gain_r }}"
+               oninput="show('colour_gain_r-val', parseFloat(this.value).toFixed(1))">
+      </div>
+
+      <div class="field" id="awb-gains-b-field">
+        <div class="field-header">
+          <label for="colour_gain_b">Blue gain</label>
+          <span class="field-value" id="colour_gain_b-val">{{ cfg.colour_gain_b }}</span>
+        </div>
+        <div class="field-desc">Manual blue channel gain (0–32). Active when auto white balance is disabled.</div>
+        <input type="range" id="colour_gain_b" name="colour_gain_b"
+               min="0.0" max="32.0" step="0.1" value="{{ cfg.colour_gain_b }}"
+               oninput="show('colour_gain_b-val', parseFloat(this.value).toFixed(1))">
+      </div>
+      {% else %}
+      {% if cfg.awb_enable %}<input type="hidden" name="awb_enable" value="on">{% endif %}
+      <input type="hidden" name="awb_mode" value="{{ cfg.awb_mode }}">
+      <input type="hidden" name="colour_gain_r" value="{{ cfg.colour_gain_r }}">
+      <input type="hidden" name="colour_gain_b" value="{{ cfg.colour_gain_b }}">
+      {% endif %}
+
+      <div class="field">
+        <div class="field-header">
+          <label for="exposure_value">Exposure compensation</label>
+          <span class="field-value" id="exposure_value-val">{{ cfg.exposure_value }}</span>
+        </div>
+        <div class="field-desc">Adjusts the target exposure in stops. 0.0 is unchanged. Positive values brighten; negative darken. Range: −8 to +8.</div>
+        <input type="range" id="exposure_value" name="exposure_value"
+               min="-8.0" max="8.0" step="0.5" value="{{ cfg.exposure_value }}"
+               oninput="show('exposure_value-val', parseFloat(this.value).toFixed(1))">
+      </div>
+
+      <div class="field">
+        <div class="field-header">
+          <label for="sharpness">Sharpness</label>
+          <span class="field-value" id="sharpness-val">{{ cfg.sharpness }}</span>
+        </div>
+        <div class="field-desc">Edge enhancement. 1.0 is default. Increase for crisper detail; decrease to soften noise artefacts.</div>
+        <input type="range" id="sharpness" name="sharpness"
+               min="0.0" max="16.0" step="0.5" value="{{ cfg.sharpness }}"
+               oninput="show('sharpness-val', parseFloat(this.value).toFixed(1))">
+      </div>
+
+      <div class="field">
+        <div class="field-header"><label for="noise_reduction">Noise reduction</label></div>
+        <div class="field-desc">Spatial noise reduction algorithm. Higher modes produce cleaner images at some CPU cost.</div>
+        <select id="noise_reduction" name="noise_reduction">
+          <option value="0" {% if cfg.noise_reduction == 0 %}selected{% endif %}>0 — Off</option>
+          <option value="1" {% if cfg.noise_reduction == 1 %}selected{% endif %}>1 — Fast</option>
+          <option value="2" {% if cfg.noise_reduction == 2 %}selected{% endif %}>2 — High quality</option>
+          <option value="3" {% if cfg.noise_reduction == 3 %}selected{% endif %}>3 — Minimal</option>
+          <option value="4" {% if cfg.noise_reduction == 4 %}selected{% endif %}>4 — ZSL</option>
+        </select>
+      </div>
+
+      {% if is_imx219 %}
+      <div class="field">
+        <div class="field-header"><label>Camera variant</label></div>
+        <div class="field-desc">Mark this as a NoIR camera (no infrared cut filter). NoIR cameras produce a purple/blue cast in colour mode and are normally used in greyscale. Changing this affects which colour controls appear — save and reload to apply.</div>
+        <div class="check-row">
+          <input type="checkbox" id="noir" name="noir" {% if cfg.noir %}checked{% endif %}>
+          <label for="noir">NoIR (no IR cut filter)</label>
+        </div>
+      </div>
+      {% else %}
+      {% if cfg.noir %}<input type="hidden" name="noir" value="on">{% endif %}
+      {% endif %}
+
+      <div class="field">
+        <div class="field-header">
+          <label for="rotation">Rotation</label>
+          <span class="field-value" id="rotation-val">{{ cfg.rotation }}°</span>
+        </div>
+        <div class="field-desc">Rotate the camera image. Use 180° if the camera is mounted upside down.</div>
+        <input type="range" id="rotation" name="rotation"
+               min="0" max="270" step="90" value="{{ cfg.rotation }}"
+               oninput="show('rotation-val', this.value, '°')">
       </div>
     </section>
 
@@ -290,9 +424,9 @@
           <label for="retention_days">Retention period</label>
           <span class="field-value" id="retention_days-val">{{ cfg.retention_days }} days</span>
         </div>
-        <div class="field-desc">Files older than this are deleted by a nightly cron job at 02:00.</div>
+        <div class="field-desc">Files older than this are deleted automatically before each new capture. The disk space threshold below applies independently — whichever limit is reached first triggers cleanup.</div>
         <input type="range" id="retention_days" name="retention_days"
-               min="7" max="365" step="1" value="{{ cfg.retention_days }}"
+               min="1" max="365" step="1" value="{{ cfg.retention_days }}"
                oninput="show('retention_days-val', this.value, ' days')">
       </div>
 
@@ -359,6 +493,7 @@
     </section>
 
     <div class="actions">
+      <button type="button" id="btn-preview" onclick="startPreview()">Preview</button>
       <button type="submit">Save &amp; restart</button>
     </div>
 
@@ -372,8 +507,67 @@
     const movie = document.getElementById('mode-movie').checked;
     document.getElementById('movie-duration-field').style.display = movie ? 'block' : 'none';
   }
+  function toggleAwb() {
+    const cb = document.getElementById('awb_enable');
+    if (!cb) return;
+    const on = cb.checked;
+    const modeField = document.getElementById('awb-mode-field');
+    const gainsR = document.getElementById('awb-gains-r-field');
+    const gainsB = document.getElementById('awb-gains-b-field');
+    if (modeField) modeField.style.display = on ? 'block' : 'none';
+    if (gainsR)    gainsR.style.display    = on ? 'none'  : 'block';
+    if (gainsB)    gainsB.style.display    = on ? 'none'  : 'block';
+  }
   // Set initial state
   toggleMovieDuration();
+  toggleAwb();
+</script>
+<div id="preview-overlay" style="display:none">
+  <div id="preview-dialog">
+    <img id="preview-loading" src="/static/loading.gif" alt="Loading">
+    <div id="preview-status">Stopping motion detector and taking photo…</div>
+    <img id="preview-img" style="display:none" src="" alt="Preview">
+    <button id="btn-preview-ok" onclick="closePreview()">OK</button>
+  </div>
+</div>
+<script>
+  async function startPreview() {
+    const overlay = document.getElementById('preview-overlay');
+    const img = document.getElementById('preview-img');
+    const loading = document.getElementById('preview-loading');
+    const status = document.getElementById('preview-status');
+    img.style.display = 'none';
+    img.src = '';
+    loading.style.display = 'block';
+    status.style.display = 'block';
+    status.textContent = 'Stopping motion detector and taking photo…';
+    overlay.style.display = 'flex';
+
+    try {
+      const data = new FormData(document.querySelector('form'));
+      const res = await fetch('/api/preview', { method: 'POST', body: data });
+      const json = await res.json();
+      if (json.error) {
+        loading.style.display = 'none';
+        status.textContent = 'Error: ' + json.error;
+      } else {
+        loading.style.display = 'none';
+        status.style.display = 'none';
+        img.src = json.image;
+        img.style.display = 'block';
+      }
+    } catch (e) {
+      loading.style.display = 'none';
+      status.textContent = 'Failed: ' + e.message;
+    }
+  }
+
+  function closePreview() {
+    document.getElementById('preview-overlay').style.display = 'none';
+    const img = document.getElementById('preview-img');
+    img.src = '';
+    img.style.display = 'none';
+  }
 </script>
 </body>
 </html>
