@@ -142,6 +142,15 @@
   function getFavs() { return new Set(JSON.parse(localStorage.getItem(FAVS_KEY) || '[]')); }
   function saveFavs(s) { localStorage.setItem(FAVS_KEY, JSON.stringify([...s])); }
   function isFav(path) { return getFavs().has(path); }
+
+  async function syncFavs() {
+    try {
+      const res = await fetch('/api/favourites');
+      const paths = await res.json();
+      saveFavs(new Set(paths));
+    } catch (e) {}
+  }
+
   function toggleFav(btn, path) {
     const favs = getFavs();
     const wasOn = favs.has(path);
@@ -150,6 +159,11 @@
     btn.classList.toggle('fav-on', !wasOn);
     btn.title = wasOn ? 'Favourite' : 'Unfavourite';
     btn.innerHTML = wasOn ? heartEmpty : heartFilled;
+    fetch('/api/favourites', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path, action: wasOn ? 'remove' : 'add'}),
+    });
   }
 
   function fmtCardDate(d) {
@@ -193,6 +207,11 @@
     card.style.opacity = '.4';
     const res = await fetch(`/api/images/${path}`, { method: 'DELETE' });
     if (res.ok) {
+      if (isFav(path)) {
+        const favs = getFavs();
+        favs.delete(path);
+        saveFavs(favs);
+      }
       card.remove();
     } else {
       card.style.opacity = '1';
@@ -235,7 +254,6 @@
   const observer = new IntersectionObserver(entries => {
     if (entries[0].isIntersecting) loadMore();
   }, { rootMargin: '400px' });
-  observer.observe(sentinel);
 
   document.getElementById('date-picker').addEventListener('change', function() {
     if (this.value) window.location.href = '/date/' + this.value;
@@ -248,6 +266,9 @@
       `<a href="/date/${d}" class="${d === selectedDate ? 'active' : ''}">${fmtCardDate(d)}</a>`
     ).join('');
   });
+
+  // Sync favourites from server before rendering any cards
+  syncFavs().finally(() => observer.observe(sentinel));
 </script>
 </body>
 </html>

@@ -3,6 +3,7 @@
 
 import base64
 import configparser
+import json
 import os
 import shutil
 import subprocess
@@ -13,6 +14,7 @@ from pathlib import Path
 from flask import Flask, jsonify, redirect, render_template, request, send_from_directory, url_for
 
 CONFIG_PATH = Path(__file__).parent / "config.ini"
+FAVS_PATH   = Path(__file__).parent / "favourites.json"
 
 def load_cfg():
     cfg = configparser.ConfigParser()
@@ -123,12 +125,28 @@ def get_all_media(date_filter: str | None = None) -> list[dict]:
 
 
 def get_dates() -> list[str]:
+    """Return only dates that contain at least one media file."""
     if not IMAGE_DIR.exists():
         return []
-    return sorted(
-        {d.name for d in IMAGE_DIR.iterdir() if d.is_dir()},
-        reverse=True,
-    )
+    dates = set()
+    for f in IMAGE_DIR.glob("**/*.mp4"):
+        dates.add(f.parent.name)
+    for f in IMAGE_DIR.glob("**/*.jpg"):
+        # Skip poster frames — they live alongside an MP4 of the same stem
+        if not f.with_suffix(".mp4").exists():
+            dates.add(f.parent.name)
+    return sorted(dates, reverse=True)
+
+
+def load_favs() -> set:
+    try:
+        return set(json.loads(FAVS_PATH.read_text()))
+    except Exception:
+        return set()
+
+
+def save_favs(favs: set) -> None:
+    FAVS_PATH.write_text(json.dumps(sorted(favs)))
 
 
 def get_camera_name() -> str:
@@ -172,6 +190,25 @@ def api_dates():
     return jsonify(get_dates())
 
 
+@app.route("/api/favourites", methods=["GET"])
+def get_favourites():
+    return jsonify(sorted(load_favs()))
+
+
+@app.route("/api/favourites", methods=["POST"])
+def set_favourite():
+    data = request.get_json(silent=True) or {}
+    path = data.get("path", "")
+    action = data.get("action", "add")
+    favs = load_favs()
+    if action == "add":
+        favs.add(path)
+    else:
+        favs.discard(path)
+    save_favs(favs)
+    return jsonify({"ok": True})
+
+
 @app.route("/images/<path:filename>")
 def serve_image(filename: str):
     return send_from_directory(IMAGE_DIR, filename)
@@ -188,6 +225,12 @@ def delete_image(filename: str):
         poster = target.with_suffix(".jpg")
         if poster.exists():
             poster.unlink()
+    # Remove from favourites
+    rel_path = f"{target.parent.name}/{target.name}"
+    favs = load_favs()
+    if rel_path in favs:
+        favs.discard(rel_path)
+        save_favs(favs)
     # Remove empty date directory
     try:
         target.parent.rmdir()

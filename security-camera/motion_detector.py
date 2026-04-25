@@ -2,6 +2,7 @@
 """Motion-triggered security camera using picamera2 and OpenCV."""
 
 import configparser
+import json
 import logging
 import os
 import signal
@@ -24,6 +25,7 @@ logging.basicConfig(
 log = logging.getLogger("security-camera")
 
 CONFIG_PATH = Path(__file__).parent / "config.ini"
+FAVS_PATH   = Path(__file__).parent / "favourites.json"
 MIN_FREE_PCT = 5.0      # fallback — overridden by config at startup
 TARGET_FREE_PCT = 15.0  # fallback — overridden by config at startup
 
@@ -39,22 +41,43 @@ def free_disk_pct(path: Path) -> float:
     return st.f_bavail / st.f_blocks * 100
 
 
+def load_favs() -> set:
+    try:
+        return set(json.loads(FAVS_PATH.read_text()))
+    except Exception:
+        return set()
+
+
 def evict_oldest(image_dir: Path) -> None:
-    """Delete the single oldest media file to reclaim space."""
-    files = sorted(
+    """Delete the single oldest media file, preferring non-favourites over favourites."""
+    all_files = sorted(
         list(image_dir.glob("**/*.jpg")) + list(image_dir.glob("**/*.mp4")),
         key=lambda p: p.stat().st_mtime,
     )
+    # Exclude poster JPGs — they are cleaned up alongside their MP4
+    files = [f for f in all_files if not (f.suffix == ".jpg" and f.with_suffix(".mp4").exists())]
     if not files:
         return
-    oldest = files[0]
+
+    favs = load_favs()
+
+    def is_fav(p: Path) -> bool:
+        return f"{p.parent.name}/{p.name}" in favs
+
+    # Non-favourites first (oldest → newest), then favourites (oldest → newest)
+    non_favs = [f for f in files if not is_fav(f)]
+    fav_files = [f for f in files if is_fav(f)]
+    ordered = non_favs + fav_files
+
+    oldest = ordered[0]
     oldest.unlink()
     # Remove associated poster frame if this was a movie
     if oldest.suffix == ".mp4":
         poster = oldest.with_suffix(".jpg")
         if poster.exists():
             poster.unlink()
-    log.warning("Disk space low — deleted oldest file: %s", oldest)
+    label = " (favourite)" if is_fav(oldest) else ""
+    log.warning("Disk space low — deleted oldest%s file: %s", label, oldest)
     try:
         oldest.parent.rmdir()
     except OSError:
